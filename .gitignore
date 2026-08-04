@@ -1,0 +1,12 @@
+node_modules
+
+# Local env files - never commit real credentials
+.env
+.env.local
+.env.*.local
+
+# Vercel
+.vercel
+
+# OS / editor noise
+.DS_Store
