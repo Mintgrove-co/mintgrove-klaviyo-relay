@@ -53,6 +53,84 @@ function verifySignature(rawBody, signatureHeader, signingSecret) {
   return crypto.timingSafeEqual(expectedBuf, providedBuf);
 }
 
+// Every Mintgrove event lands in Klaviyo under this one metric. Build one Flow
+// triggered on it and split on the `event` property, one branch per email.
+export const METRIC_NAME = "Mintgrove Event";
+
+// Klaviyo API revision this relay was written against.
+const KLAVIYO_REVISION = "2026-07-15";
+
+// Mintgrove gives each delivery attempt 10 seconds. Klaviyo gets 8 of them, so
+// a slow Klaviyo call still ends in a 502 that Mintgrove sees and retries,
+// rather than in Mintgrove timing out while we are mid-request.
+const KLAVIYO_TIMEOUT_MS = 8000;
+
+// Events whose profile is the address in the named field, when that field holds
+// a real email address. Every other event, including one this relay has never
+// heard of, is identified by external_id instead.
+const EMAIL_FIELD_BY_EVENT = {
+  "seat.assigned": "recipient_email",
+  "seat.revoked": "recipient_email",
+  "purchase.completed": "admin_email",
+  "subscription.renewal_reminder": "admin_email",
+};
+
+// A syntax check, not a deliverability check. It exists because seat.revoked
+// from the store path carries the provider's own identifier in
+// recipient_email, which for most apps is an opaque customer id, not an email.
+function isEmail(value) {
+  return (
+    typeof value === "string" &&
+    value.length <= 254 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  );
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+// Which Klaviyo profile this event belongs to. Returns null when the payload
+// carries nothing usable, in which case nothing is sent.
+export function profileIdentifier(payload) {
+  const emailField = EMAIL_FIELD_BY_EVENT[payload.event];
+  if (emailField && isEmail(payload[emailField])) {
+    return { email: payload[emailField] };
+  }
+  const externalId = nonEmptyString(payload.external_id) ?? nonEmptyString(payload.seat_id);
+  return externalId ? { external_id: externalId } : null;
+}
+
+// The Klaviyo Create Event body for one Mintgrove payload, or null if the
+// payload has no usable profile identifier. Properties are the payload itself,
+// every field under its own name, unchanged.
+export function toKlaviyoEvent(payload) {
+  const identifier = profileIdentifier(payload);
+  if (!identifier) return null;
+
+  const attributes = {
+    metric: { data: { type: "metric", attributes: { name: METRIC_NAME } } },
+    profile: { data: { type: "profile", attributes: identifier } },
+    properties: payload,
+  };
+  // Klaviyo records only the first event per unique_id for a given profile and
+  // metric, so a Mintgrove redelivery of the same event_id is not counted twice.
+  if (nonEmptyString(payload.event_id)) attributes.unique_id = payload.event_id;
+
+  return { data: { type: "event", attributes } };
+}
+
+// The only thing this relay ever logs. No payload bodies, no emails, no names.
+function log(outcome, payload) {
+  const line = JSON.stringify({
+    event: typeof payload?.event === "string" ? payload.event : null,
+    event_id: typeof payload?.event_id === "string" ? payload.event_id : null,
+    outcome,
+  });
+  if (outcome === "forwarded") console.log(`[mintgrove-klaviyo-relay] ${line}`);
+  else console.error(`[mintgrove-klaviyo-relay] ${line}`);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -60,12 +138,13 @@ export default async function handler(req, res) {
   }
 
   const signingSecret = process.env.MINTGROVE_SIGNING_SECRET;
-  if (!signingSecret) {
+  const klaviyoKey = process.env.KLAVIYO_PRIVATE_API_KEY;
+  if (!signingSecret || !klaviyoKey) {
     // Fail closed. An unauthenticated relay lets anyone who discovers this URL
-    // POST fabricated seat events into your Klaviyo account.
-    console.error(
-      "[mintgrove-klaviyo-relay] MINTGROVE_SIGNING_SECRET is not set - refusing to process webhooks"
-    );
+    // POST fabricated events into your Klaviyo account. A 5xx here also means
+    // Mintgrove keeps retrying, so events sent before you set the variables
+    // still arrive once you do.
+    log("relay_not_configured", null);
     res.status(500).json({ error: "Relay is not configured" });
     return;
   }
@@ -74,84 +153,68 @@ export default async function handler(req, res) {
 
   const version = req.headers["mintgrove-webhook-version"];
   if (version && version !== SUPPORTED_WEBHOOK_VERSION) {
-    console.error(
-      `[mintgrove-klaviyo-relay] unsupported webhook version ${version} (expected ${SUPPORTED_WEBHOOK_VERSION})`
-    );
+    log("unsupported_webhook_version", null);
     res.status(400).json({ error: "Unsupported webhook version" });
     return;
   }
 
   if (!verifySignature(rawBody, req.headers["mintgrove-signature"], signingSecret)) {
-    console.error("[mintgrove-klaviyo-relay] rejected request with invalid signature");
+    log("invalid_signature", null);
     res.status(401).json({ error: "Invalid signature" });
     return;
   }
 
-  let body;
+  let payload;
   try {
-    body = JSON.parse(rawBody);
+    payload = JSON.parse(rawBody);
   } catch {
-    console.error("[mintgrove-klaviyo-relay] rejected request with malformed JSON body");
+    payload = undefined;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    log("malformed_body", null);
     res.status(400).json({ error: "Malformed JSON body" });
     return;
   }
 
-  const metricName =
-    body.event === "seat.assigned"
-      ? "Enterprise Seat Assigned"
-      : "Enterprise Seat Revoked";
-
-  const [firstName, ...rest] = (body.recipient_name ?? "").split(" ");
-
-  const klaviyoPayload = {
-    data: {
-      type: "event",
-      attributes: {
-        metric: { data: { type: "metric", attributes: { name: metricName } } },
-        profile: {
-          data: {
-            type: "profile",
-            attributes: {
-              email: body.recipient_email,
-              first_name: firstName ?? "",
-              last_name: rest.join(" "),
-            },
-          },
-        },
-        properties: {
-          org_name: body.org_name,
-          app_name: body.app_name,
-          seat_expiry: body.seat_expiry,
-          offer_code: body.offer_code,
-          offer_code_used: body.offer_code_used,
-        },
-        time: new Date().toISOString(),
-      },
-    },
-  };
-
-  const maskedEmail = body.recipient_email
-    ? body.recipient_email.replace(/^(.)(.*)(@.*)$/, (_, a, b, c) => `${a}${b[0] ?? ""}***${c}`)
-    : "unknown";
-  console.log(`[mintgrove-klaviyo-relay] ${body.event} for ${maskedEmail}`);
-
-  try {
-    const klaviyoRes = await fetch("https://a.klaviyo.com/api/events/", {
-      method: "POST",
-      headers: {
-        Authorization: `Klaviyo-API-Key ${process.env.KLAVIYO_PRIVATE_API_KEY}`,
-        "Content-Type": "application/json",
-        revision: "2024-02-15",
-      },
-      body: JSON.stringify(klaviyoPayload),
-    });
-    if (!klaviyoRes.ok) {
-      console.error(`[mintgrove-klaviyo-relay] Klaviyo API returned ${klaviyoRes.status}`);
-    }
-  } catch (err) {
-    console.error("[mintgrove-klaviyo-relay] forward failed", err);
+  const klaviyoEvent = toKlaviyoEvent(payload);
+  if (!klaviyoEvent) {
+    // Klaviyo cannot record an event without a profile, and inventing one would
+    // create a junk profile. Answer non-2xx so the miss shows up on Mintgrove's
+    // side as a failed delivery instead of disappearing behind a 200.
+    log("no_profile_identifier", payload);
+    res.status(422).json({ error: "No usable profile identifier" });
+    return;
   }
 
-  // Always ack 2xx so Mintgrove does not treat this as a failed delivery.
+  // Klaviyo is called before we answer Mintgrove. If it fails, we answer 502 and
+  // Mintgrove's retry schedule sends the event again; unique_id stops a retry
+  // after a slow-but-successful call from being recorded twice.
+  let klaviyoStatus;
+  try {
+    const klaviyoRes = await fetch("https://a.klaviyo.com/api/events", {
+      method: "POST",
+      headers: {
+        Authorization: `Klaviyo-API-Key ${klaviyoKey}`,
+        "Content-Type": "application/vnd.api+json",
+        Accept: "application/vnd.api+json",
+        revision: KLAVIYO_REVISION,
+      },
+      body: JSON.stringify(klaviyoEvent),
+      signal: AbortSignal.timeout(KLAVIYO_TIMEOUT_MS),
+    });
+    klaviyoStatus = klaviyoRes.status;
+  } catch (err) {
+    log(err?.name === "TimeoutError" ? "klaviyo_timeout" : "klaviyo_unreachable", payload);
+    res.status(502).json({ error: "Klaviyo did not accept the event" });
+    return;
+  }
+
+  if (klaviyoStatus < 200 || klaviyoStatus >= 300) {
+    log(`klaviyo_rejected_${klaviyoStatus}`, payload);
+    res.status(502).json({ error: "Klaviyo did not accept the event" });
+    return;
+  }
+
+  log("forwarded", payload);
   res.status(200).json({ ok: true });
 }

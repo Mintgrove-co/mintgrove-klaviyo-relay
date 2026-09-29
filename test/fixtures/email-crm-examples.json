@@ -1,0 +1,86 @@
+{
+  "source": "https://app.mintgrove.co/docs/email-crm",
+  "read": "2026-09-29",
+  "examples": {
+    "seat.assigned": {
+      "event": "seat.assigned",
+      "recipient_email": "user@acme.org",
+      "recipient_name": "Jane Smith",
+      "offer_code": null,
+      "offer_code_used": false,
+      "org_name": "Acme Corp",
+      "app_name": "Your App",
+      "seat_expiry": "2027-06-29T10:00:00Z",
+      "event_id": "8f2a1b6e-4d90-4c3a-9e71-5b6a2f0d8c44"
+    },
+    "seat.revoked": {
+      "event": "seat.revoked",
+      "recipient_email": "user@acme.org",
+      "recipient_name": "Jane Smith",
+      "offer_code": "MG-4KQ2-8ZTP",
+      "offer_code_used": true,
+      "org_name": "Acme Corp",
+      "app_name": "Your App",
+      "seat_expiry": "2027-06-29T10:00:00Z",
+      "seat_id": "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
+      "external_id": null,
+      "reason": "revoked",
+      "event_id": "c179e6a2-3b58-4f21-9d64-1a0e7f6c2b93"
+    },
+    "seat.restored": {
+      "event": "seat.restored",
+      "seat_id": "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
+      "external_id": "usr_8827311",
+      "event_id": "7e2a91d4-6c03-4b88-a5f1-3d90b7e4c216"
+    },
+    "seat.expiry_ignored": {
+      "event": "seat.expiry_ignored",
+      "seat_id": "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
+      "external_id": "usr_8827311",
+      "ignored_reason": "not_mintgrove_granted",
+      "event_id": "c93b5a17-4e28-4f60-b71a-8c05d6e2f341"
+    },
+    "seat.grant_held": {
+      "event": "seat.grant_held",
+      "seat_id": "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
+      "external_id": "usr_8827311",
+      "hold_reason": "personal_subscription_conflict",
+      "expected_resolution_at": "2027-03-14T09:00:00Z",
+      "event_id": "f0c4d81b-52a7-4e39-b6d2-90a1e35c7f84"
+    },
+    "seat.grant_released": {
+      "event": "seat.grant_released",
+      "seat_id": "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
+      "external_id": "usr_8827311",
+      "event_id": "7a2e6f90-14c3-4bd8-91e5-3f6081a4c2db"
+    },
+    "purchase.completed": {
+      "event": "purchase.completed",
+      "purchase_type": "initial",
+      "buyer_org_id": "3f9a1c7e-6b20-4f81-9e2d-77c4a0b51d38",
+      "org_name": "Acme Corp",
+      "admin_email": "buyer@acme.org",
+      "app_name": "Your App",
+      "seats_purchased": 25,
+      "total_seats": 25,
+      "term": "annual",
+      "price_per_seat": 12.5,
+      "period_end_date": "2027-06-29T10:00:00.000Z",
+      "event_id": "9b6c4a18-2e7f-4d0a-b153-8f2d9e6a0c71"
+    },
+    "subscription.renewal_reminder": {
+      "event": "subscription.renewal_reminder",
+      "app_subscription_id": "5acee4d8-7b31-4c92-a0e6-1d83f7b2c4a9",
+      "buyer_org_id": "3f9a1c7e-6b20-4f81-9e2d-77c4a0b51d38",
+      "org_name": "Acme Corp",
+      "admin_email": "buyer@acme.org",
+      "app_name": "Your App",
+      "seats_purchased": 25,
+      "term": "annual",
+      "price_per_seat": 12.5,
+      "currency": "usd",
+      "period_end_date": "2027-06-29T10:00:00.000Z",
+      "event_id": "4c8b1e75-9a02-4f36-bd71-6e05c3a92f14"
+    }
+  }
+}
