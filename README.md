@@ -18,7 +18,9 @@ You'll need:
 - **A Klaviyo account**, and a **Private API Key** with write access to Events.
   In Klaviyo: **Settings → API Keys → Create Private API Key**.
 - **Your Mintgrove webhook signing secret.**
-  In Mintgrove: **Settings → Integrations → Outbound webhook**.
+  In Mintgrove: **Settings → Integrations → Email Delivery → Email webhook endpoint**,
+  in the **Signing secret** field. (If your app uses bind identity, the section is
+  called **Event delivery** and the card **Webhook endpoint**.)
 - **A Vercel account** (the free plan is fine) and [Node.js](https://nodejs.org) installed.
 
 You do not need to know how to write JavaScript to deploy this, but you will need to
@@ -88,9 +90,11 @@ This prints your public URL, something like
 
 ### 4. Tell Mintgrove where to send events
 
-In Mintgrove, go to **Settings → Integrations**, find the **Email** section, and enter
-your relay's URL — your deployment URL with `/api/relay` on the end — into the
-**Webhook endpoint URL** field, then click **Save**:
+In Mintgrove, go to **Settings → Integrations**, find the **Email Delivery** section
+(**Event delivery** for a bind-identity app), and in its **Email webhook endpoint** card
+(**Webhook endpoint** for a bind-identity app) enter your relay's URL (your deployment
+URL with `/api/relay` on the end) into the **Webhook endpoint URL** field, then click
+**Save**:
 
 ```
 https://your-project-name.vercel.app/api/relay
@@ -112,15 +116,20 @@ is in the `event` property.
 | `unique_id`   | The payload's `event_id` |
 | Profile       | See the next table |
 
-The profile the event is recorded against:
+The profile the event is recorded against. The relay tries the first column, then the
+second, and forwards nothing if neither gives it an identifier:
 
-| `event` | Klaviyo profile identifier |
-| ------- | -------------------------- |
-| `seat.assigned` | `email` = `recipient_email` |
-| `seat.revoked` | `email` = `recipient_email` if it is an email address, otherwise as for the identifier-only events below |
-| `purchase.completed` | `email` = `admin_email` |
-| `subscription.renewal_reminder` | `email` = `admin_email` |
-| `seat.restored`, `seat.expiry_ignored`, `seat.grant_held`, `seat.grant_released`, and any `event` value not listed here | `external_id` = the payload's `external_id`, or `seat_id` if `external_id` is empty |
+| `event` | First choice | Otherwise |
+| ------- | ------------ | --------- |
+| `seat.assigned` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
+| `seat.revoked` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. Every `seat.revoked` carries `seat_id`, so this always resolves |
+| `purchase.completed` | `email` = `admin_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
+| `subscription.renewal_reminder` | `email` = `admin_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
+| `seat.restored`, `seat.expiry_ignored`, `seat.grant_held`, `seat.grant_released`, and any `event` value not listed here | `external_id` = the payload's `external_id`, or `seat_id` if `external_id` is empty | nothing sent, `422` |
+
+"Is an email address" is a syntax check (something `@` something `.` something, no
+spaces, at most 254 characters), not a deliverability check. A missing, `null`, empty or
+non-email value never becomes a profile email.
 
 Details that matter when you build on this:
 
@@ -147,6 +156,12 @@ Details that matter when you build on this:
   email for its event and no `external_id` or `seat_id` either, Klaviyo has no
   profile to record it against. The relay forwards nothing and returns `422` to
   Mintgrove, so the miss appears as a failed delivery rather than a silent success.
+  For `seat.assigned`, `purchase.completed` and `subscription.renewal_reminder`, which
+  carry no `external_id` or `seat_id`, that means any delivery whose `recipient_email`
+  or `admin_email` is missing or not an email address. In particular, a
+  `subscription.renewal_reminder` whose `admin_email` is `null` returns `422`. Mintgrove
+  does not expect to send one; the `422` is a guard, so a malformed reminder shows up as
+  a failed delivery instead of an event on a junk profile.
 - **Redeliveries are deduplicated by Klaviyo.** Mintgrove sends the same `event_id`
   on every retry of one event. Klaviyo records only the first event with a given
   `unique_id` for the same profile and metric, so a redelivery does not produce a
@@ -222,6 +237,9 @@ The tests use Node's built-in test runner, with no dependencies. They send each 
 Mintgrove's eight documented example payloads through the relay against a stand-in
 for Klaviyo, and cover opaque `seat.revoked` identifiers, unknown events, redelivery,
 bad signatures, Klaviyo failures and logging.
+`test/request-body.test.js` goes further: for every case it compares the exact request
+the relay sends to Klaviyo (URL, method, headers and body bytes) with one written out by
+hand from the contract above, so any change to what reaches Klaviyo fails a test.
 
 ## This is a starting point, not a finished product
 
