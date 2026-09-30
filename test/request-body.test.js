@@ -104,7 +104,7 @@ function assertExactlyOneRequest(payload, profileAttributes) {
 }
 
 // The relay's closed set of outcomes (README "Checking it works").
-const OUTCOME = /^(forwarded|klaviyo_rejected_\d{3}|klaviyo_timeout|klaviyo_unreachable|no_profile_identifier|invalid_signature|unsupported_webhook_version|malformed_body|relay_not_configured)$/;
+const OUTCOME = /^(forwarded|klaviyo_rejected_\d{3}|klaviyo_dropped_\d{3}|klaviyo_timeout|klaviyo_unreachable|no_profile_identifier|invalid_signature|unsupported_webhook_version|malformed_body|relay_not_configured)$/;
 
 // Every log line is the prefix plus exactly {event, event_id, outcome}: event
 // and event_id are the payload's own (or null before the signature is
@@ -342,16 +342,58 @@ for (const status of [200, 201, 202, 204]) {
   });
 }
 
-for (const status of [301, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504]) {
+// Retryable: a setup error (401/403 key, 404/405/410/415 request shape), 408,
+// 429, every 5xx, a non-2xx that is not a 4xx, and 413/422, which Klaviyo's
+// status table does not document.
+for (const status of [301, 401, 403, 404, 405, 408, 410, 413, 415, 422, 429, 500, 502, 503, 504]) {
   test(`QA 8: Klaviyo answering ${status} returns 502 and logs klaviyo_rejected_${status}`, async () => {
     mockKlaviyo(() => new Response(null, { status }));
     const payload = examples["seat.assigned"];
     const res = await deliver(payload);
     assert.equal(res.statusCode, 502);
     assert.deepEqual(res.body, { error: "Klaviyo did not accept the event" });
+    assertExactlyOneRequest(payload, { email: "user@acme.org" });
     assertLogsCarryNoPayload(payload, `klaviyo_rejected_${status}`);
   });
 }
+
+// MIN-876 ruling (Nicole, 2026-09-30, corrected): only a Klaviyo response that
+// says THIS EVENT's data is bad is final. Per Klaviyo's status table
+// (https://developers.klaviyo.com/en/docs/rate_limits_and_error_handling) that
+// is 400 and 409. The relay answers 200 and logs the rejection with no payload
+// body; the exact request still went to Klaviyo exactly once.
+for (const status of [400, 409]) {
+  test(`QA 8: Klaviyo rejecting the event's data with ${status} is final: 200, one request, logs klaviyo_dropped_${status}`, async () => {
+    mockKlaviyo(() => new Response(JSON.stringify({ errors: [{ status, detail: "rejected" }] }), { status }));
+    const payload = examples["purchase.completed"];
+    const res = await deliver(payload);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body, { ok: false, error: "Klaviyo rejected the event; not retried" });
+    assertExactlyOneRequest(payload, { email: "buyer@acme.org" });
+    assertLogsCarryNoPayload(payload, `klaviyo_dropped_${status}`);
+  });
+}
+
+test("QA 8: a final rejection is not re-sent on redelivery-style retries either: every delivery is one request, one 200", async () => {
+  mockKlaviyo(() => new Response(null, { status: 400 }));
+  const payload = examples["seat.revoked"];
+  for (let i = 0; i < 3; i++) assert.equal((await deliver(payload)).statusCode, 200);
+  assert.equal(calls.length, 3);
+});
+
+// MIN-876 ruling 5: only the body is signed, so unique_id must come from the
+// body's event_id, never from the Mintgrove-Event-Id header.
+test("unique_id is the signed body's event_id, even when the Mintgrove-Event-Id header says otherwise", async () => {
+  const payload = examples["seat.grant_held"];
+  const raw = JSON.stringify(payload);
+  const res = await deliver(null, {
+    rawBody: raw,
+    headers: { "mintgrove-signature": sign(raw), "mintgrove-event-id": "11111111-2222-3333-4444-555555555555" },
+  });
+  assert.equal(res.statusCode, 200);
+  assertExactlyOneRequest(payload, { external_id: "usr_8827311" });
+  assert.equal(JSON.parse(calls[0].init.body).data.attributes.unique_id, payload.event_id);
+});
 
 test("QA 8: Klaviyo unreachable returns 502", async () => {
   mockKlaviyo(() => {
@@ -387,6 +429,8 @@ test("QA 9: across all eight events and every outcome, logs never carry payload 
   for (const payload of Object.values(examples)) await deliver(payload); // forwarded
   mockKlaviyo(() => new Response(null, { status: 500 }));
   for (const payload of Object.values(examples)) await deliver(payload); // klaviyo_rejected_500
+  mockKlaviyo(() => new Response(null, { status: 400 }));
+  await deliver(examples["purchase.completed"]); // klaviyo_dropped_400
   await deliver({ ...examples["subscription.renewal_reminder"], admin_email: null }); // no_profile_identifier
   await deliver(null, { rawBody: JSON.stringify(examples["seat.assigned"]), headers: {} }); // invalid_signature
 
@@ -401,6 +445,6 @@ test("QA 9: across all eight events and every outcome, logs never carry payload 
   }
   assert.deepEqual(
     [...outcomes].sort(),
-    ["forwarded", "invalid_signature", "klaviyo_rejected_500", "no_profile_identifier"].sort()
+    ["forwarded", "invalid_signature", "klaviyo_dropped_400", "klaviyo_rejected_500", "no_profile_identifier"].sort()
   );
 });
