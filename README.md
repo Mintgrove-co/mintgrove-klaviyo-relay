@@ -189,27 +189,28 @@ The relay calls Klaviyo **before** it answers Mintgrove, and the answer reflects
 Klaviyo did:
 
 - Klaviyo accepts the event: the relay returns `200`.
-- Klaviyo rejects the event with a 4xx status other than `429` (an invalid address,
-  a malformed property, a key without Events access): the relay logs the rejection,
-  without the payload body, and returns `200`. Sending the same event again would get
-  the same answer, so it is not retried, and it is not recorded in Klaviyo. The log
-  line (`klaviyo_dropped_<status>`) is the only record of it.
-- Klaviyo returns `429` or a 5xx, can't be reached, or takes longer than 8 seconds:
-  the relay returns `502`, and Mintgrove's retry schedule sends the event again.
+- Klaviyo rejects the event's data with `400` (a missing or invalid parameter, such as
+  an invalid email) or `409` (a conflict): the relay logs the rejection, without the
+  payload body, and returns `200`. Sending the same event again would get the same
+  answer, so it is not retried, and it is not recorded in Klaviyo. The log line
+  (`klaviyo_dropped_<status>`) is the only record of it. These are the two statuses
+  Klaviyo's [status code table](https://developers.klaviyo.com/en/docs/rate_limits_and_error_handling)
+  defines as a problem with the request's own content.
+- Anything else: a `401` or `403` (a wrong or under-scoped API key), any other 4xx,
+  `429`, a 5xx, no answer within 8 seconds, or no connection. The relay returns `502`,
+  and Mintgrove's retry schedule sends the event again. A setup error therefore clears
+  itself once you fix it within the retry window.
 
 In one paragraph, as the setup guide states it:
 
-> The relay calls Klaviyo before it answers Mintgrove. If Klaviyo accepts the event, the relay returns `200`. If Klaviyo rejects the event with a 4xx status other than `429`, the relay logs the rejection without the payload body and returns `200`: a retry would get the same answer, so the event is not retried and is not recorded in Klaviyo. If Klaviyo returns `429` or a 5xx, cannot be reached, or does not answer within 8 seconds, the relay returns `502`, and Mintgrove's retry schedule sends the event again. Every retry carries the same `event_id`, which the relay sends to Klaviyo as `unique_id`, so a retry never records the event twice.
+> The relay calls Klaviyo before it answers Mintgrove. If Klaviyo accepts the event, the relay returns `200`. If Klaviyo rejects the event's data with `400` or `409`, the relay logs the rejection without the payload body and returns `200`: a retry would get the same answer, so the event is not retried and is not recorded in Klaviyo. For any other failure, including a `401` or `403` from a wrong or under-scoped API key, a `429`, a 5xx, no answer within 8 seconds or no connection, the relay returns `502`, and Mintgrove's retry schedule sends the event again. Every retry carries the same `event_id`, which the relay sends to Klaviyo as `unique_id`, so a retry never records the event twice.
 
 Mintgrove gives each delivery attempt 10 seconds, so the relay stops waiting on
 Klaviyo after 8. A `502` is retried in the same request, roughly 1, 3 and 8 seconds
 apart. If those fail too, the event goes to Mintgrove's durable queue and is retried
 roughly 5, 10, 20 and 40 minutes later, then hourly, then every two hours, for up to
-6 hours from the first failure. A Klaviyo outage within that window loses nothing.
-One that lasts longer than 6 hours still loses the event. A wrong or under-scoped
-API key is different: Klaviyo answers `401` or `403`, which is final, so every event
-sent while the key is wrong is dropped, not retried. Watch for
-`klaviyo_dropped_401` / `klaviyo_dropped_403` right after you set or rotate the key.
+6 hours from the first failure. A Klaviyo outage, or a wrong API key fixed within that
+window, loses nothing. One that lasts longer than 6 hours still loses the event.
 
 **The relay's own `422` is not final to Mintgrove.** Mintgrove does not retry a 4xx
 in the same request, but it puts every failed delivery, 4xx included, on its durable
@@ -235,8 +236,8 @@ The possible outcomes are:
 | Outcome | Relay returns | Meaning |
 | ------- | ------------- | ------- |
 | `forwarded` | `200` | Klaviyo accepted the event. |
-| `klaviyo_rejected_<status>` | `502` | Klaviyo returned `429`, a 5xx, or another non-2xx that is not a 4xx. Mintgrove will retry. |
-| `klaviyo_dropped_<status>` | `200` | Klaviyo rejected the event with a 4xx other than `429`. Final: not retried, not recorded in Klaviyo. |
+| `klaviyo_rejected_<status>` | `502` | Klaviyo returned any non-2xx other than `400` or `409` (a key error, a rate limit, a server error). Mintgrove will retry. |
+| `klaviyo_dropped_<status>` | `200` | Klaviyo rejected the event's data with `400` or `409`. Final: not retried, not recorded in Klaviyo. |
 | `klaviyo_timeout` / `klaviyo_unreachable` | `502` | Klaviyo didn't answer in 8 seconds, or couldn't be reached. Mintgrove will retry. |
 | `no_profile_identifier` | `422` | The payload had no usable email, `external_id` or `seat_id`. Nothing was sent. |
 | `invalid_signature` | `401` | Missing, wrong or expired signature. Nothing was sent. |
@@ -244,9 +245,11 @@ The possible outcomes are:
 | `malformed_body` | `400` | The signed body wasn't a JSON object. |
 | `relay_not_configured` | `500` | `MINTGROVE_SIGNING_SECRET` or `KLAVIYO_PRIVATE_API_KEY` isn't set. |
 
-`klaviyo_dropped_401` almost always means `KLAVIYO_PRIVATE_API_KEY` is wrong, and
-`klaviyo_dropped_403` that it lacks Events write access. Events dropped that way are
-gone; fix the key and they are not replayed.
+`klaviyo_rejected_401` almost always means `KLAVIYO_PRIVATE_API_KEY` is wrong, and
+`klaviyo_rejected_403` that it lacks Events write access. Both are retried: fix the key
+and events from the last 6 hours arrive on Mintgrove's next retries.
+`klaviyo_dropped_400` means Klaviyo refused that event's data, most often an address
+Klaviyo will not accept; that event is final.
 
 ## Running the tests
 

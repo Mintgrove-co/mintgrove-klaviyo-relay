@@ -342,8 +342,10 @@ for (const status of [200, 201, 202, 204]) {
   });
 }
 
-// Retryable: 429 (rate limit), every 5xx, and a non-2xx that is not a 4xx.
-for (const status of [301, 429, 500, 502, 503, 504]) {
+// Retryable: a setup error (401/403 key, 404/405/410/415 request shape), 408,
+// 429, every 5xx, a non-2xx that is not a 4xx, and 413/422, which Klaviyo's
+// status table does not document.
+for (const status of [301, 401, 403, 404, 405, 408, 410, 413, 415, 422, 429, 500, 502, 503, 504]) {
   test(`QA 8: Klaviyo answering ${status} returns 502 and logs klaviyo_rejected_${status}`, async () => {
     mockKlaviyo(() => new Response(null, { status }));
     const payload = examples["seat.assigned"];
@@ -355,11 +357,13 @@ for (const status of [301, 429, 500, 502, 503, 504]) {
   });
 }
 
-// MIN-876 ruling (Nicole, 2026-09-30): a Klaviyo 4xx other than 429 will not
-// succeed on retry, so the relay answers 200 and logs the rejection, with no
-// payload body. The exact request still went to Klaviyo exactly once.
-for (const status of [400, 401, 403, 404, 408, 409, 413, 422]) {
-  test(`QA 8: Klaviyo rejecting with ${status} is final: 200, one request, logs klaviyo_dropped_${status}`, async () => {
+// MIN-876 ruling (Nicole, 2026-09-30, corrected): only a Klaviyo response that
+// says THIS EVENT's data is bad is final. Per Klaviyo's status table
+// (https://developers.klaviyo.com/en/docs/rate_limits_and_error_handling) that
+// is 400 and 409. The relay answers 200 and logs the rejection with no payload
+// body; the exact request still went to Klaviyo exactly once.
+for (const status of [400, 409]) {
+  test(`QA 8: Klaviyo rejecting the event's data with ${status} is final: 200, one request, logs klaviyo_dropped_${status}`, async () => {
     mockKlaviyo(() => new Response(JSON.stringify({ errors: [{ status, detail: "rejected" }] }), { status }));
     const payload = examples["purchase.completed"];
     const res = await deliver(payload);

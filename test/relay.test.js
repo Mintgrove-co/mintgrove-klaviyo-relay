@@ -292,7 +292,7 @@ test("the Klaviyo call carries a timeout signal, the current revision and the AP
   assert.equal(init.headers.Authorization, "Klaviyo-API-Key pk_test");
 });
 
-for (const status of [429, 500, 503]) {
+for (const status of [401, 403, 404, 408, 422, 429, 500, 503]) {
   test(`Klaviyo answering ${status} returns 502 so Mintgrove retries`, async () => {
     klaviyo = fakeKlaviyo({ status });
     const res = await deliver(examples["seat.assigned"]);
@@ -300,8 +300,8 @@ for (const status of [429, 500, 503]) {
   });
 }
 
-for (const status of [400, 401]) {
-  test(`Klaviyo rejecting with ${status} is final: 200, so Mintgrove does not retry it`, async () => {
+for (const status of [400, 409]) {
+  test(`Klaviyo rejecting the event's data with ${status} is final: 200, so Mintgrove does not retry it`, async () => {
     klaviyo = fakeKlaviyo({ status });
     const res = await deliver(examples["seat.assigned"]);
     assert.equal(res.statusCode, 200);
