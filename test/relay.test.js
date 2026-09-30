@@ -144,6 +144,25 @@ test("seat.revoked with an email lands on the recipient_email profile", async ()
   assert.deepEqual(sentAttributes().profile.data.attributes, { email: "user@acme.org" });
 });
 
+// MIN-888: seat.restored carries recipient_email, so it is found the same way
+// as seat.revoked: email first, then external_id, then seat_id.
+test("seat.restored with an email lands on the recipient_email profile", async () => {
+  await deliver(examples["seat.restored"]);
+  assert.deepEqual(sentAttributes().profile.data.attributes, { email: "user@acme.org" });
+});
+
+test("seat.restored with a non-email recipient_email falls back to external_id", async () => {
+  await deliver({ ...examples["seat.restored"], recipient_email: "not-an-email" });
+  assert.deepEqual(sentAttributes().profile.data.attributes, { external_id: "usr_8827311" });
+});
+
+test("seat.restored with no usable email and no external_id falls back to seat_id", async () => {
+  await deliver({ ...examples["seat.restored"], recipient_email: null, external_id: null });
+  assert.deepEqual(sentAttributes().profile.data.attributes, {
+    external_id: "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
+  });
+});
+
 for (const name of ["purchase.completed", "subscription.renewal_reminder"]) {
   test(`${name} lands on the admin_email profile, never a seat holder's`, async () => {
     // Even with a seat-holder address present, the buyer admin is the profile.
@@ -152,7 +171,7 @@ for (const name of ["purchase.completed", "subscription.renewal_reminder"]) {
   });
 }
 
-for (const name of ["seat.restored", "seat.expiry_ignored", "seat.grant_held", "seat.grant_released"]) {
+for (const name of ["seat.expiry_ignored", "seat.grant_held", "seat.grant_released"]) {
   test(`${name} is identified by external_id and never creates an email profile`, async () => {
     await deliver(examples[name]);
     assert.deepEqual(sentAttributes().profile.data.attributes, { external_id: "usr_8827311" });

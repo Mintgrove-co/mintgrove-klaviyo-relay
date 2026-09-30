@@ -135,7 +135,7 @@ function assertLogsCarryNoPayload(payload, expectedOutcome) {
 const PROFILE_BY_EVENT = {
   "seat.assigned": { email: "user@acme.org" },
   "seat.revoked": { email: "user@acme.org" },
-  "seat.restored": { external_id: "usr_8827311" },
+  "seat.restored": { email: "user@acme.org" },
   "seat.expiry_ignored": { external_id: "usr_8827311" },
   "seat.grant_held": { external_id: "usr_8827311" },
   "seat.grant_released": { external_id: "usr_8827311" },
@@ -196,9 +196,35 @@ test("QA 3: ...and falls back to seat_id when that seat has no external_id", asy
   assertExactlyOneRequest(payload, { external_id: "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38" });
 });
 
+// --- 3b. seat.restored (MIN-888): recipient_email, then external_id, then seat_id
+
+for (const [label, recipientEmail] of [["null", null], ["empty", ""], ["not an email", "usr_8827311"], ["missing", undefined]]) {
+  test(`QA 3b: seat.restored with ${label} recipient_email is keyed by external_id`, async () => {
+    const payload = { ...examples["seat.restored"], external_id: "usr_8827311" };
+    if (recipientEmail === undefined) delete payload.recipient_email;
+    else payload.recipient_email = recipientEmail;
+    await deliver(payload);
+    assertExactlyOneRequest(payload, { external_id: "usr_8827311" });
+  });
+}
+
+test("QA 3b: seat.restored with no usable email and a null external_id falls back to seat_id", async () => {
+  const payload = { ...examples["seat.restored"], recipient_email: "not-an-email", external_id: null };
+  await deliver(payload);
+  assertExactlyOneRequest(payload, { external_id: "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38" });
+});
+
+test("QA 3b: seat.restored with no usable email, external_id or seat_id is not sent: 422", async () => {
+  const { external_id, seat_id, ...payload } = { ...examples["seat.restored"], recipient_email: null };
+  const res = await deliver(payload);
+  assert.equal(res.statusCode, 422);
+  assert.equal(calls.length, 0);
+  assertLogsCarryNoPayload(payload, "no_profile_identifier");
+});
+
 // --- 4. identifier-only events never build a profile from an email ----------
 
-for (const name of ["seat.restored", "seat.expiry_ignored", "seat.grant_held", "seat.grant_released"]) {
+for (const name of ["seat.expiry_ignored", "seat.grant_held", "seat.grant_released"]) {
   test(`QA 4: ${name} never uses an email, even a valid one smuggled into the payload`, async () => {
     const payload = { ...examples[name], recipient_email: "user@acme.org", admin_email: "buyer@acme.org" };
     await deliver(payload);
