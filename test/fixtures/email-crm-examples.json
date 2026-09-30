@@ -1,6 +1,6 @@
 {
   "source": "https://app.mintgrove.co/docs/email-crm",
-  "read": "2026-09-29",
+  "read": "2026-09-30",
   "examples": {
     "seat.assigned": {
       "event": "seat.assigned",
@@ -31,6 +31,9 @@
       "event": "seat.restored",
       "seat_id": "b41f7d2c-90ae-4a63-8f15-2c7e0d9a6b38",
       "external_id": "usr_8827311",
+      "recipient_email": "user@acme.org",
+      "org_name": "Acme Corp",
+      "seat_expiry": "2027-06-29T10:00:00Z",
       "event_id": "7e2a91d4-6c03-4b88-a5f1-3d90b7e4c216"
     },
     "seat.expiry_ignored": {
