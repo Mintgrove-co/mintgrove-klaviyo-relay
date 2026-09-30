@@ -120,6 +120,15 @@ export function toKlaviyoEvent(payload) {
   return { data: { type: "event", attributes } };
 }
 
+// A Klaviyo 4xx other than 429 is Klaviyo's verdict on the request itself (an
+// invalid address, a malformed property, a key without Events access): a
+// retry of the same bytes gets the same answer. 429 is rate limiting and
+// clears on its own; 5xx, timeouts and network errors are Klaviyo's side. Those
+// answer 502 so Mintgrove retries. Ruled by Nicole 2026-09-30 (MIN-876).
+export function isFinalRejection(status) {
+  return status >= 400 && status < 500 && status !== 429;
+}
+
 // The only thing this relay ever logs. No payload bodies, no emails, no names.
 function log(outcome, payload) {
   const line = JSON.stringify({
@@ -186,9 +195,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Klaviyo is called before we answer Mintgrove. If it fails, we answer 502 and
-  // Mintgrove's retry schedule sends the event again; unique_id stops a retry
-  // after a slow-but-successful call from being recorded twice.
+  // Klaviyo is called before we answer Mintgrove. If it fails in a way a retry
+  // can fix, we answer 502 and Mintgrove's retry schedule sends the event
+  // again; unique_id stops a retry after a slow-but-successful call from being
+  // recorded twice. If Klaviyo rejects the event outright, we answer 200: see
+  // isFinalRejection.
   let klaviyoStatus;
   try {
     const klaviyoRes = await fetch("https://a.klaviyo.com/api/events", {
@@ -210,6 +221,14 @@ export default async function handler(req, res) {
   }
 
   if (klaviyoStatus < 200 || klaviyoStatus >= 300) {
+    if (isFinalRejection(klaviyoStatus)) {
+      // Sending the same event again cannot change Klaviyo's answer, so a 502
+      // would only buy six hours of identical retries. The event is not in
+      // Klaviyo; the log line (never the payload) is the record of it.
+      log(`klaviyo_dropped_${klaviyoStatus}`, payload);
+      res.status(200).json({ ok: false, error: "Klaviyo rejected the event; not retried" });
+      return;
+    }
     log(`klaviyo_rejected_${klaviyoStatus}`, payload);
     res.status(502).json({ error: "Klaviyo did not accept the event" });
     return;
