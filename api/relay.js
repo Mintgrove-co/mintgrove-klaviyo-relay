@@ -71,6 +71,7 @@ const KLAVIYO_TIMEOUT_MS = 8000;
 const EMAIL_FIELD_BY_EVENT = {
   "seat.assigned": "recipient_email",
   "seat.revoked": "recipient_email",
+  "seat.restored": "recipient_email",
   "purchase.completed": "admin_email",
   "subscription.renewal_reminder": "admin_email",
 };

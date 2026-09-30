@@ -123,9 +123,10 @@ second, and forwards nothing if neither gives it an identifier:
 | ------- | ------------ | --------- |
 | `seat.assigned` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
 | `seat.revoked` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. Every `seat.revoked` carries `seat_id`, so this always resolves |
+| `seat.restored` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. Every `seat.restored` carries `seat_id`, so this always resolves |
 | `purchase.completed` | `email` = `admin_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
 | `subscription.renewal_reminder` | `email` = `admin_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
-| `seat.restored`, `seat.expiry_ignored`, `seat.grant_held`, `seat.grant_released`, and any `event` value not listed here | `external_id` = the payload's `external_id`, or `seat_id` if `external_id` is empty | nothing sent, `422` |
+| `seat.expiry_ignored`, `seat.grant_held`, `seat.grant_released`, and any `event` value not listed here | `external_id` = the payload's `external_id`, or `seat_id` if `external_id` is empty | nothing sent, `422` |
 
 "Is an email address" is a syntax check (something `@` something `.` something, no
 spaces, at most 254 characters), not a deliverability check. A missing, `null`, empty or
@@ -139,8 +140,9 @@ Details that matter when you build on this:
   email if it is a syntactically valid email address. If it is not, the event is
   identified by `external_id` (or `seat_id`) instead.
 - **Identifier-only events only reach a person if your profiles carry the same
-  `external_id`.** For `seat.restored`, `seat.expiry_ignored`, `seat.grant_held`,
-  `seat.grant_released` and store-path `seat.revoked`, the relay sets the Klaviyo
+  `external_id`.** For `seat.expiry_ignored`, `seat.grant_held`,
+  `seat.grant_released`, and a `seat.revoked` or `seat.restored` whose
+  `recipient_email` is not an email address, the relay sets the Klaviyo
   profile's `external_id`. That only resolves to an existing person if the profiles
   in your Klaviyo account already carry the same `external_id` your app gives
   Mintgrove. If they don't, Klaviyo creates a new profile with that `external_id`
