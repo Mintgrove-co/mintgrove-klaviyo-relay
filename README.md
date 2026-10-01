@@ -100,8 +100,16 @@ URL with `/api/relay` on the end) into the **Webhook endpoint URL** field, then 
 https://your-project-name.vercel.app/api/relay
 ```
 
-That's it. Assign a seat to a test user, then check **Analytics → Metrics** in Klaviyo
-for a `Mintgrove Event` event whose `event` property is `seat.assigned`.
+Now send one real event through the relay: assign a seat to a test user, then check
+**Analytics → Metrics** in Klaviyo for a `Mintgrove Event` event whose `event` property
+is `seat.assigned`. The metric's source is **API**.
+
+> **Let the relay create the `Mintgrove Event` metric. Do not create it any other way.**
+> Klaviyo identifies a metric by its name *and* the source that created it. An event
+> named `Mintgrove Event` sent any other way (a Klaviyo test event, a sample or backfill
+> event, the Klaviyo MCP, another integration, Zapier or Make) creates a second metric
+> with the same name, and a Flow built on that one never receives the relay's events.
+> Send the first real event through the relay, as above, before you build the Flow.
 
 ## What it sends to Klaviyo
 
@@ -173,12 +181,20 @@ Details that matter when you build on this:
 
 ### Building the Flow
 
-Create one Flow triggered on the `Mintgrove Event` metric. Add a multi-branch split
+Build the Flow only after the relay has created the metric (see step 4). Create one
+Flow triggered on the `Mintgrove Event` metric whose source is **API**, the one this
+relay writes to. Add a multi-branch split
 on the `event` property, with one branch per email you send, for
 example `seat.assigned` and `subscription.renewal_reminder`. Anything that matches no
 branch ends with no email. Do not chain yes/no splits. In templates, payload fields
 are available as event properties, for example `{{ event.org_name }}` or
 `{{ event.period_end_date }}`.
+
+If Klaviyo shows two `Mintgrove Event` metrics, the trigger and every branch condition
+must use the one with source **API**. A Flow already built on the other one cannot be
+re-pointed, because Klaviyo does not let you change a Flow's trigger: rebuild it on the
+API metric. The same applies if you ever move between this relay and a Make or Zapier
+scenario, which write to their own source.
 
 The full per-event contract, including which email to send each event and who
 receives it, is in the [setup guide](https://app.mintgrove.co/docs/klaviyo). The
