@@ -107,7 +107,7 @@ is `seat.assigned`. The metric's source is **API**.
 > **Let the relay create the `Mintgrove Event` metric. Do not create it any other way.**
 > Klaviyo identifies a metric by its name *and* the source that created it. An event
 > named `Mintgrove Event` sent any other way (a Klaviyo test event, a sample or backfill
-> event, the Klaviyo MCP, another integration, Zapier or Make) creates a second metric
+> event, the Klaviyo MCP, another integration, or a no-code tool like Make or Zapier) creates a second metric
 > with the same name, and a Flow built on that one never receives the relay's events.
 > Send the first real event through the relay, as above, before you build the Flow.
 
@@ -193,8 +193,7 @@ are available as event properties, for example `{{ event.org_name }}` or
 If Klaviyo shows two `Mintgrove Event` metrics, the trigger and every branch condition
 must use the one with source **API**. A Flow already built on the other one cannot be
 re-pointed, because Klaviyo does not let you change a Flow's trigger: rebuild it on the
-API metric. The same applies if you ever move between this relay and a Make or Zapier
-scenario, which write to their own source.
+API metric. The same applies if you ever move between this relay and a no-code tool like Make or Zapier, which writes to its own source.
 
 The full per-event contract, including which email to send each event and who
 receives it, is in the [setup guide](https://app.mintgrove.co/docs/klaviyo). The
