@@ -18,9 +18,8 @@ You'll need:
 - **A Klaviyo account**, and a **Private API Key** with write access to Events.
   In Klaviyo: **Settings → API Keys → Create Private API Key**.
 - **Your Mintgrove webhook signing secret.**
-  In Mintgrove: **Settings → Integrations → Email Delivery → Email webhook endpoint**,
-  in the **Signing secret** field. (If your app uses bind identity, the section is
-  called **Event delivery** and the card **Webhook endpoint**.)
+  In Mintgrove: **Settings → Integrations → Event delivery → Webhook endpoint**,
+  in the **Signing secret** field.
 - **A Vercel account** (the free plan is fine) and [Node.js](https://nodejs.org) installed.
 
 You do not need to know how to write JavaScript to deploy this, but you will need to
@@ -90,9 +89,8 @@ This prints your public URL, something like
 
 ### 4. Tell Mintgrove where to send events
 
-In Mintgrove, go to **Settings → Integrations**, find the **Email Delivery** section
-(**Event delivery** for a bind-identity app), and in its **Email webhook endpoint** card
-(**Webhook endpoint** for a bind-identity app) enter your relay's URL (your deployment
+In Mintgrove, go to **Settings → Integrations**, find the **Event delivery** section,
+and in its **Webhook endpoint** card enter your relay's URL (your deployment
 URL with `/api/relay` on the end) into the **Webhook endpoint URL** field, then click
 **Save**:
 
@@ -143,8 +141,9 @@ non-email value never becomes a profile email.
 Details that matter when you build on this:
 
 - **`seat.revoked` does not always carry an email.** When the store or billing side
-  ends a subscription, `recipient_email` holds whatever identifier the provider sent,
-  which for most apps is an opaque customer id. The relay only uses it as a profile
+  ends a subscription, `recipient_email` holds the identifier your app gave the
+  provider, which is the id you bound the seat with through the Bind API and is usually
+  not an email address. The relay only uses it as a profile
   email if it is a syntactically valid email address. If it is not, the event is
   identified by `external_id` (or `seat_id`) instead.
 - **Identifier-only events only reach a person if your profiles carry the same
