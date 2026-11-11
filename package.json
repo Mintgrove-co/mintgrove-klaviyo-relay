@@ -2,7 +2,7 @@
   "name": "mintgrove-klaviyo-relay",
   "version": "1.0.0",
   "private": false,
-  "description": "Relay that translates Mintgrove seat-event webhooks into Klaviyo Events API calls.",
+  "description": "Reference endpoint that verifies Mintgrove webhooks. It sends nothing to Klaviyo or any other CRM.",
   "type": "module",
   "license": "MIT",
   "engines": {

@@ -1,22 +1,30 @@
-# Mintgrove → Klaviyo relay
+# Mintgrove webhook relay (reference)
 
-A small, deployable example that connects Mintgrove to Klaviyo.
+A small, deployable example of an endpoint that receives Mintgrove webhooks.
 
 When something happens to a seat or a purchase in your app, Mintgrove sends a
-webhook: a single HTTP request describing what happened. Klaviyo wants events in its
-own format. This relay sits between the two. It receives every Mintgrove webhook,
-checks that the request genuinely came from Mintgrove, turns it into a
-[Klaviyo Create Event](https://developers.klaviyo.com/en/reference/create_event)
-call, and forwards it. Once events are landing in Klaviyo, you build one Flow off
-them that sends the right email for each event. It's one file, has no dependencies,
-and is meant to be forked and deployed as-is.
+webhook: a single HTTP request describing what happened. This relay receives every
+Mintgrove webhook, checks that the request genuinely came from Mintgrove, and
+acknowledges it. It is one file, has no dependencies, and is meant to be forked and
+deployed as-is.
+
+**These events are for sending one transactional email each. They are not for CRM
+use.** Do not create, update or subscribe a profile, contact, list or audience in
+Klaviyo or any other CRM from these events, and do not send these events to Klaviyo.
+A buyer admin's details belong in your CRM only if that buyer has opted in to your
+app, and not through these events. Mintgrove cannot see what your app does with a
+payload after it is delivered.
+
+This relay follows that rule. It sends nothing to Klaviyo or any CRM, and it builds no
+profile from `recipient_email` or `admin_email`. To send the email an event calls for,
+add your own transactional email provider's send call where `api/relay.js` marks it.
+The full per-event contract, including who each email is for, is in the
+[setup guide](https://app.mintgrove.co/docs/klaviyo).
 
 ## Before you start
 
 You'll need:
 
-- **A Klaviyo account**, and a **Private API Key** with write access to Events.
-  In Klaviyo: **Settings → API Keys → Create Private API Key**.
 - **Your Mintgrove webhook signing secret.**
   In Mintgrove: **Settings → Integrations → Event delivery → Webhook endpoint**,
   in the **Signing secret** field.
@@ -30,7 +38,7 @@ be comfortable running a few commands in a terminal.
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Mintgrove-co/mintgrove-klaviyo-relay)
 
 The button above is the quickest route: it copies this repo into your own GitHub
-account and deploys it, prompting you for the two environment variables along the way.
+account and deploys it, prompting you for the environment variable along the way.
 Once it finishes, skip to [step 4](#4-tell-mintgrove-where-to-send-events).
 
 Prefer to do it by hand? Follow the four steps below.
@@ -64,16 +72,15 @@ and gives you a preview deployment.
 
 ### 3. Add your credentials
 
-The relay reads two environment variables. Add both:
+The relay reads one environment variable. Add it:
 
 ```bash
-vercel env add KLAVIYO_PRIVATE_API_KEY production
 vercel env add MINTGROVE_SIGNING_SECRET production
 ```
 
-Each command prompts you to paste the value. You can also add them in the Vercel
+The command prompts you to paste the value. You can also add it in the Vercel
 dashboard under **Settings → Environment Variables**. See `.env.example` for a
-description of each.
+description.
 
 Now deploy to production:
 
@@ -85,7 +92,7 @@ This prints your public URL, something like
 `https://your-project-name.vercel.app`.
 
 > **Environment variables only apply to deployments made after you add them.** If you
-> ran `vercel --prod` before adding the variables, run it again.
+> ran `vercel --prod` before adding the variable, run it again.
 
 ### 4. Tell Mintgrove where to send events
 
@@ -99,142 +106,41 @@ https://your-project-name.vercel.app/api/relay
 ```
 
 Now send one real event through the relay: assign a seat to a test user, then check
-**Analytics → Metrics** in Klaviyo for a `Mintgrove Event` event whose `event` property
-is `seat.assigned`. The metric's source is **API**.
+the logs (see [Checking it works](#checking-it-works)) for a `verified` line for
+`seat.assigned`.
 
-> **Let the relay create the `Mintgrove Event` metric. Do not create it any other way.**
-> Klaviyo identifies a metric by its name *and* the source that created it. An event
-> named `Mintgrove Event` sent any other way (a Klaviyo test event, a sample or backfill
-> event, the Klaviyo MCP, another integration, or a no-code tool like Make or Zapier) creates a second metric
-> with the same name, and a Flow built on that one never receives the relay's events.
-> Send the first real event through the relay, as above, before you build the Flow.
+## What it does with an event
 
-## What it sends to Klaviyo
+Every event is handled the same way: the relay verifies it and answers `200`. It makes
+no outbound request of any kind. In particular:
 
-Every Mintgrove event is sent to Klaviyo's Create Event API under **one metric**,
-`Mintgrove Event`. The relay does not choose a metric per event. Which event it was
-is in the `event` property.
+- **Nothing is sent to Klaviyo or any other CRM**, for any event, including an event
+  this relay has never heard of.
+- **No profile is built.** `recipient_email` and `admin_email` are not read, and the
+  relay never sets a profile, contact or list entry from any field.
+- **The payload is not stored.** It is not written to the logs either.
 
-| Klaviyo field | Value |
-| ------------- | ----- |
-| Metric name   | `Mintgrove Event`, for every event |
-| Properties    | The full webhook payload: every field, under the same name, unchanged, including `event` |
-| `unique_id`   | The payload's `event_id` |
-| Profile       | See the next table |
+Your own handler goes where `api/relay.js` marks it, and is where the email is sent.
+The contract it follows, per event, is in the
+[setup guide](https://app.mintgrove.co/docs/klaviyo), and the payloads are documented at
+[app.mintgrove.co/docs/email-crm](https://app.mintgrove.co/docs/email-crm). Two things
+from that contract matter when you add the send:
 
-The profile the event is recorded against. The relay tries the first column, then the
-second, and forwards nothing if neither gives it an identifier:
+- **Deduplicate on `event_id`.** Mintgrove sends the same `event_id` on every retry of
+  one event, so a redelivery must not send a second email. Only the body is signed, so
+  read `event_id` from the verified body, never from the `Mintgrove-Event-Id` header.
+- **An event with no usable address and no way to look the person up in your own
+  records is not emailed.** Answer `200` and send nothing.
 
-| `event` | First choice | Otherwise |
-| ------- | ------------ | --------- |
-| `seat.assigned` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
-| `seat.revoked` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. Every `seat.revoked` carries `seat_id`, so this always resolves |
-| `seat.restored` | `email` = `recipient_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. Every `seat.restored` carries `seat_id`, so this always resolves |
-| `purchase.completed` | `email` = `admin_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
-| `subscription.renewal_reminder` | `email` = `admin_email`, if it is an email address | `external_id` = the payload's `external_id`, or `seat_id` if that is empty. This event carries neither, so in practice: nothing sent, `422` |
-| `seat.expiry_ignored`, `seat.grant_held`, `seat.grant_released`, and any `event` value not listed here | `external_id` = the payload's `external_id`, or `seat_id` if `external_id` is empty | nothing sent, `422` |
+## If your send fails
 
-"Is an email address" is a syntax check (something `@` something `.` something, no
-spaces, at most 254 characters), not a deliverability check. A missing, `null`, empty or
-non-email value never becomes a profile email.
-
-Details that matter when you build on this:
-
-- **`seat.revoked` does not always carry an email.** When the store or billing side
-  ends a subscription, `recipient_email` holds the identifier your app gave the
-  provider, which is the id you bound the seat with through the Bind API and is usually
-  not an email address. The relay only uses it as a profile
-  email if it is a syntactically valid email address. If it is not, the event is
-  identified by `external_id` (or `seat_id`) instead.
-- **Identifier-only events only reach a person if your profiles carry the same
-  `external_id`.** For `seat.expiry_ignored`, `seat.grant_held`,
-  `seat.grant_released`, and a `seat.revoked` or `seat.restored` whose
-  `recipient_email` is not an email address, the relay sets the Klaviyo
-  profile's `external_id`. That only resolves to an existing person if the profiles
-  in your Klaviyo account already carry the same `external_id` your app gives
-  Mintgrove. If they don't, Klaviyo creates a new profile with that `external_id`
-  and no email, and a Flow cannot email it.
-- **No profile email is ever set from a missing or non-email value.** The relay never
-  sets a profile's name or any other profile field either. Use
-  `{{ event.recipient_name }}` and the other event properties in your templates.
-- **Unknown events are forwarded, not dropped.** If Mintgrove adds an event this
-  relay doesn't know about, it goes to Klaviyo unchanged, under `Mintgrove Event`,
-  identified by `external_id` (or `seat_id`). It matches no branch in your Flow, so no
-  email is sent until you add one.
-- **An event with no usable identifier is not sent.** If a payload has no usable
-  email for its event and no `external_id` or `seat_id` either, Klaviyo has no
-  profile to record it against. The relay forwards nothing and returns `422` to
-  Mintgrove, so the miss appears as a failed delivery rather than a silent success.
-  For `seat.assigned`, `purchase.completed` and `subscription.renewal_reminder`, which
-  carry no `external_id` or `seat_id`, that means any delivery whose `recipient_email`
-  or `admin_email` is missing or not an email address. In particular, a
-  `subscription.renewal_reminder` whose `admin_email` is `null` returns `422`. Mintgrove
-  does not expect to send one; the `422` is a guard, so a malformed reminder shows up as
-  a failed delivery instead of an event on a junk profile.
-- **Redeliveries are deduplicated by Klaviyo.** Mintgrove sends the same `event_id`
-  on every retry of one event. Klaviyo records only the first event with a given
-  `unique_id` for the same profile and metric, so a redelivery does not produce a
-  second event or a second email. `unique_id` is taken from the `event_id` in the
-  signed body. Only the body is signed, so the relay never reads the
-  `Mintgrove-Event-Id` header.
-
-### Building the Flow
-
-Build the Flow only after the relay has created the metric (see step 4). Create one
-Flow triggered on the `Mintgrove Event` metric whose source is **API**, the one this
-relay writes to. Add a multi-branch split
-on the `event` property, with one branch per email you send, for
-example `seat.assigned` and `subscription.renewal_reminder`. Anything that matches no
-branch ends with no email. Do not chain yes/no splits. In templates, payload fields
-are available as event properties, for example `{{ event.org_name }}` or
-`{{ event.period_end_date }}`.
-
-If Klaviyo shows two `Mintgrove Event` metrics, the trigger and every branch condition
-must use the one with source **API**. A Flow already built on the other one cannot be
-re-pointed, because Klaviyo does not let you change a Flow's trigger: rebuild it on the
-API metric. The same applies if you ever move between this relay and a no-code tool like Make or Zapier, which writes to its own source.
-
-The full per-event contract, including which email to send each event and who
-receives it, is in the [setup guide](https://app.mintgrove.co/docs/klaviyo). The
-payloads themselves are documented at
-[app.mintgrove.co/docs/email-crm](https://app.mintgrove.co/docs/email-crm).
-
-## If Klaviyo fails
-
-The relay calls Klaviyo **before** it answers Mintgrove, and the answer reflects what
-Klaviyo did:
-
-- Klaviyo accepts the event: the relay returns `200`.
-- Klaviyo rejects the event's data with `400` (a missing or invalid parameter, such as
-  an invalid email) or `409` (a conflict): the relay logs the rejection, without the
-  payload body, and returns `200`. Sending the same event again would get the same
-  answer, so it is not retried, and it is not recorded in Klaviyo. The log line
-  (`klaviyo_dropped_<status>`) is the only record of it. These are the two statuses
-  Klaviyo's [status code table](https://developers.klaviyo.com/en/docs/rate_limits_and_error_handling)
-  defines as a problem with the request's own content.
-- Anything else: a `401` or `403` (a wrong or under-scoped API key), any other 4xx,
-  `429`, a 5xx, no answer within 8 seconds, or no connection. The relay returns `502`,
-  and Mintgrove's retry schedule sends the event again. A setup error therefore clears
-  itself once you fix it within the retry window.
-
-In one paragraph, as the setup guide states it:
-
-> The relay calls Klaviyo before it answers Mintgrove. If Klaviyo accepts the event, the relay returns `200`. If Klaviyo rejects the event's data with `400` or `409`, the relay logs the rejection without the payload body and returns `200`: a retry would get the same answer, so the event is not retried and is not recorded in Klaviyo. For any other failure, including a `401` or `403` from a wrong or under-scoped API key, a `429`, a 5xx, no answer within 8 seconds or no connection, the relay returns `502`, and Mintgrove's retry schedule sends the event again. Every retry carries the same `event_id`, which the relay sends to Klaviyo as `unique_id`, so a retry never records the event twice.
-
-Mintgrove gives each delivery attempt 10 seconds, so the relay stops waiting on
-Klaviyo after 8. A `502` is retried in the same request, roughly 1, 3 and 8 seconds
-apart. If those fail too, the event goes to Mintgrove's durable queue and is retried
-roughly 5, 10, 20 and 40 minutes later, then hourly, then every two hours, for up to
-6 hours from the first failure. A Klaviyo outage, or a wrong API key fixed within that
-window, loses nothing. One that lasts longer than 6 hours still loses the event.
-
-**The relay's own `422` is not final to Mintgrove.** Mintgrove does not retry a 4xx
-in the same request, but it puts every failed delivery, 4xx included, on its durable
-queue: a `422` for a payload with no usable identifier is retried on the schedule
-above for up to 6 hours, failing the same way each time, and then marked dead on
-Mintgrove's side.
-Every retry carries the same `event_id`, so an attempt that Klaviyo accepted but
-answered too slowly is not recorded twice.
+Mintgrove gives each delivery attempt 10 seconds. If your handler answers with a `5xx`,
+Mintgrove retries in the same request, roughly 1, 3 and 8 seconds apart. If those fail
+too, the event goes to Mintgrove's durable queue and is retried roughly 5, 10, 20 and
+40 minutes later, then hourly, then every two hours, for up to 6 hours from the first
+failure. One that lasts longer than 6 hours loses the event. A `4xx` is not retried in
+the same request, but it is put on the same durable queue. As the relay stands, it
+answers `200` once the request is verified.
 
 ## Checking it works
 
@@ -244,28 +150,18 @@ with the event name, its `event_id` and what happened. It never logs payload bod
 email addresses, names or other personal data:
 
 ```
-[mintgrove-klaviyo-relay] {"event":"seat.assigned","event_id":"8f2a1b6e-4d90-4c3a-9e71-5b6a2f0d8c44","outcome":"forwarded"}
+[mintgrove-klaviyo-relay] {"event":"seat.assigned","event_id":"8f2a1b6e-4d90-4c3a-9e71-5b6a2f0d8c44","outcome":"verified"}
 ```
 
 The possible outcomes are:
 
 | Outcome | Relay returns | Meaning |
 | ------- | ------------- | ------- |
-| `forwarded` | `200` | Klaviyo accepted the event. |
-| `klaviyo_rejected_<status>` | `502` | Klaviyo returned any non-2xx other than `400` or `409` (a key error, a rate limit, a server error). Mintgrove will retry. |
-| `klaviyo_dropped_<status>` | `200` | Klaviyo rejected the event's data with `400` or `409`. Final: not retried, not recorded in Klaviyo. |
-| `klaviyo_timeout` / `klaviyo_unreachable` | `502` | Klaviyo didn't answer in 8 seconds, or couldn't be reached. Mintgrove will retry. |
-| `no_profile_identifier` | `422` | The payload had no usable email, `external_id` or `seat_id`. Nothing was sent. |
-| `invalid_signature` | `401` | Missing, wrong or expired signature. Nothing was sent. |
+| `verified` | `200` | The request came from Mintgrove. Nothing was sent anywhere. |
+| `invalid_signature` | `401` | Missing, wrong or expired signature. |
 | `unsupported_webhook_version` | `400` | See below. |
 | `malformed_body` | `400` | The signed body wasn't a JSON object. |
-| `relay_not_configured` | `500` | `MINTGROVE_SIGNING_SECRET` or `KLAVIYO_PRIVATE_API_KEY` isn't set. |
-
-`klaviyo_rejected_401` almost always means `KLAVIYO_PRIVATE_API_KEY` is wrong, and
-`klaviyo_rejected_403` that it lacks Events write access. Both are retried: fix the key
-and events from the last 6 hours arrive on Mintgrove's next retries.
-`klaviyo_dropped_400` means Klaviyo refused that event's data, most often an address
-Klaviyo will not accept; that event is final.
+| `relay_not_configured` | `500` | `MINTGROVE_SIGNING_SECRET` isn't set. |
 
 ## Running the tests
 
@@ -274,12 +170,9 @@ npm test
 ```
 
 The tests use Node's built-in test runner, with no dependencies. They send each of
-Mintgrove's eight documented example payloads through the relay against a stand-in
-for Klaviyo, and cover opaque `seat.revoked` identifiers, unknown events, redelivery,
-bad signatures, Klaviyo failures and logging.
-`test/request-body.test.js` goes further: for every case it compares the exact request
-the relay sends to Klaviyo (URL, method, headers and body bytes) with one written out by
-hand from the contract above, so any change to what reaches Klaviyo fails a test.
+Mintgrove's eleven documented example payloads through the relay while recording every
+outbound request, and fail if the relay makes any. They also cover bad signatures,
+unsupported versions, malformed bodies and logging.
 
 ## This is a starting point, not a finished product
 
@@ -287,7 +180,7 @@ It verifies that requests really come from Mintgrove (HMAC-SHA256 over the raw
 body, constant-time comparison, and a five-minute replay window, the scheme described
 under "Verifying webhook signatures" in the
 [setup guide](https://app.mintgrove.co/docs/klaviyo)). It refuses to process anything
-if `MINTGROVE_SIGNING_SECRET` or `KLAVIYO_PRIVATE_API_KEY` is unset, rather than
+if `MINTGROVE_SIGNING_SECRET` is unset, rather than
 quietly accepting unsigned traffic.
 
 Some things are deliberately left out, because the right answer depends on your setup:
@@ -303,11 +196,11 @@ Read `api/relay.js` before you rely on it. It's the whole thing.
 
 ## Full setup guide
 
-For the complete walkthrough, including the Klaviyo Flow that actually sends the
-emails, no-code alternatives to this relay, and troubleshooting:
+For the complete walkthrough, including the per-event contract, how to build the
+endpoint with or without this relay, and troubleshooting:
 
 **[app.mintgrove.co/docs/klaviyo](https://app.mintgrove.co/docs/klaviyo)**
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Use it, change it, ship it.
+MIT, see [LICENSE](LICENSE). Use it, change it, ship it.
